@@ -1,0 +1,134 @@
+# =====================================================
+# 32GB VRAM 하이브리드 LLM 설정
+# =====================================================
+# 이 파일은 FinancialHybridLLM 클래스의 설정을 정의합니다.
+# 사용: llm = FinancialHybridLLM(config_path="config/hybrid_llm_32gb.yaml")
+
+# Ollama 서버 설정
+ollama:
+  api_url: "http://localhost:11434"
+  timeout: 120  # API 호출 타임아웃 (초)
+
+# =====================================================
+# 프리셋 선택 (아래 중 하나 선택)
+# =====================================================
+# - "default": EXAONE 4.0 + Fin-R1 + Qwen3 (기존)
+# - "deepseek": DeepSeek-R1 중심 (금융 추론 특화, 권장)
+# - "lightweight": 경량 앙상블 (16GB VRAM 이하)
+preset: "deepseek"
+
+# =====================================================
+# 모델 설정 (프리셋 오버라이드 가능)
+# =====================================================
+# 프리셋 적용 후 개별 모델 설정을 덮어쓸 수 있습니다.
+
+# --- DeepSeek 프리셋 사용 시 (권장) ---
+models:
+  financial_reasoning:
+    name: "deepseek-r1:8b"        # 32b 없으면 8b 사용
+    weight: 0.5
+    vram: "5GB"                   # 8b 버전 기준
+    temperature: 0.1
+    priority: 1
+    description: "금융 추론 + 수치 분석 (메인)"
+
+  korean_support:
+    name: "qwen3:8b"
+    weight: 0.3
+    vram: "5GB"
+    temperature: 0.2
+    priority: 1
+    description: "한국어 이해 + 보조 분석"
+
+  fast_filter:
+    name: "deepseek-r1:1.5b"      # 빠른 필터링용
+    weight: 0.2
+    vram: "2GB"
+    temperature: 0.2
+    priority: 2
+    description: "빠른 1차 스크리닝"
+
+# --- 기본(EXAONE) 프리셋 사용 시 (preset: "default"로 변경) ---
+# models:
+#   korean_reasoning:
+#     name: "ingu627/exaone4.0:32b"
+#     weight: 0.4
+#     vram: "20GB"
+#     temperature: 0.2
+#     priority: 1
+#     description: "한국어 뉴스 이해 및 심층 추론"
+#
+#   financial_expert:
+#     name: "fin-r1"
+#     weight: 0.4
+#     vram: "6GB"
+#     temperature: 0.2
+#     priority: 1
+#     description: "금융 전문 분석 및 수치 추론"
+#
+#   fast_filter:
+#     name: "qwen3:8b"
+#     weight: 0.2
+#     vram: "5GB"
+#     temperature: 0.3
+#     priority: 2
+#     description: "빠른 1차 스크리닝 및 폴백"
+
+# 앙상블 설정
+ensemble:
+  enable_parallel: true           # 병렬 처리 활성화
+  min_models_required: 2          # 최소 2개 모델 응답 필요
+  consensus_threshold: 0.67       # 합의도 임계값
+
+# 매매 추천 임계값
+trading_thresholds:
+  strong_buy:
+    confidence: 0.8
+    consensus: 0.8
+    impact: "high"
+  buy:
+    confidence: 0.7
+    consensus: 0.67
+  weak_buy:
+    confidence: 0.5
+  sell:
+    confidence: 0.7
+    consensus: 0.67
+  strong_sell:
+    confidence: 0.8
+    consensus: 0.8
+    impact: "high"
+  weak_sell:
+    confidence: 0.5
+
+# 성능 최적화
+performance:
+  batch_delay: 0.5                # 배치 분석 시 대기 시간 (초)
+  cache_enabled: true             # 응답 캐싱 활성화
+  cache_max_size: 100             # 최대 캐시 항목 수
+  warmup_on_start: false          # 시작 시 워밍업 여부
+
+# =====================================================
+# GPU 메모리 관리
+# =====================================================
+# 효율적인 VRAM 사용을 위한 설정
+
+memory:
+  max_vram_gb: 24.0               # 최대 VRAM 사용량 (GB)
+  keep_alive: "5m"                # 모델 유지 시간 (0 = 즉시 언로드, 5m = 5분)
+  auto_unload: false              # 분석 후 자동 언로드 여부
+  optimize_on_start: true         # 시작 시 메모리 최적화
+  preload_models: false           # 시작 시 모델 미리 로드
+
+# 모델별 keep_alive 설정 (선택)
+# 개별 모델의 유지 시간을 다르게 설정할 수 있습니다.
+model_keep_alive:
+  financial_reasoning: "10m"      # 메인 모델은 더 오래 유지
+  korean_support: "5m"
+  fast_filter: "2m"               # 필터용은 빨리 언로드
+
+# 로깅 설정
+logging:
+  level: "INFO"                   # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  file: null                      # 로그 파일 경로 (null = 콘솔만)

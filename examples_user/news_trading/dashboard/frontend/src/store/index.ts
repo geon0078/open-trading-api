@@ -4,6 +4,9 @@ import type {
   EnsembleAnalysisResult,
   AccountBalance,
   Order,
+  AutoTradeStatus,
+  AutoTradeResult,
+  AutoTradeHistoryItem,
 } from '../types';
 
 interface DashboardState {
@@ -33,6 +36,13 @@ interface DashboardState {
   // 선택된 종목
   selectedStock: SurgeCandidate | null;
 
+  // 자동 트레이딩
+  autoTradeStatus: AutoTradeStatus | null;
+  autoTradeHistory: AutoTradeHistoryItem[];
+  autoTradeResults: AutoTradeResult[];
+  isAutoTrading: boolean;
+  lastAutoTradeUpdate: Date | null;
+
   // Actions
   setSurgeCandidates: (candidates: SurgeCandidate[]) => void;
   setIsScanning: (scanning: boolean) => void;
@@ -44,6 +54,13 @@ interface DashboardState {
   setTodayOrders: (orders: Order[]) => void;
   setSelectedStock: (stock: SurgeCandidate | null) => void;
   updateConnectionStatus: (type: 'ws' | 'sse', connected: boolean) => void;
+
+  // Auto Trade Actions
+  setAutoTradeStatus: (status: AutoTradeStatus) => void;
+  setAutoTradeHistory: (history: AutoTradeHistoryItem[]) => void;
+  addAutoTradeResult: (result: AutoTradeResult) => void;
+  setAutoTradeResults: (results: AutoTradeResult[]) => void;
+  setIsAutoTrading: (trading: boolean) => void;
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
@@ -61,6 +78,11 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   todayOrders: [],
   lastAccountUpdate: null,
   selectedStock: null,
+  autoTradeStatus: null,
+  autoTradeHistory: [],
+  autoTradeResults: [],
+  isAutoTrading: false,
+  lastAutoTradeUpdate: null,
 
   // Actions
   setSurgeCandidates: (candidates) =>
@@ -97,4 +119,28 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     set({
       [type === 'ws' ? 'wsConnected' : 'sseConnected']: connected,
     }),
+
+  // Auto Trade Actions
+  setAutoTradeStatus: (status) =>
+    set({
+      autoTradeStatus: status,
+      isAutoTrading: status.is_running,
+      lastAutoTradeUpdate: new Date(),
+    }),
+
+  setAutoTradeHistory: (history) => set({ autoTradeHistory: history }),
+
+  addAutoTradeResult: (result) =>
+    set((state) => ({
+      autoTradeResults: [result, ...state.autoTradeResults].slice(0, 50),
+      lastAutoTradeUpdate: new Date(),
+    })),
+
+  setAutoTradeResults: (results) =>
+    set({
+      autoTradeResults: results,
+      lastAutoTradeUpdate: new Date(),
+    }),
+
+  setIsAutoTrading: (trading) => set({ isAutoTrading: trading }),
 }));

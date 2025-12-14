@@ -189,7 +189,7 @@ class LLMService:
                 }
             }
 
-            # 각 모델 순차 호출
+            # 1단계: 하위 모델 순차 호출
             model_results = []
             for model_name in self._ensemble.ensemble_models:
                 # 모델 처리 시작
@@ -197,7 +197,8 @@ class LLMService:
                     "event": "model_started",
                     "data": {
                         "model": model_name,
-                        "status": "processing"
+                        "status": "processing",
+                        "stage": "sub_model"
                     }
                 }
 
@@ -228,7 +229,8 @@ class LLMService:
                                 "success": getattr(result, "success", True),
                                 "raw_output": getattr(result, "raw_output", ""),
                                 "error_message": getattr(result, "error_message", "")
-                            }
+                            },
+                            "stage": "sub_model"
                         }
                     }
                 except Exception as e:
@@ -236,9 +238,82 @@ class LLMService:
                         "event": "model_error",
                         "data": {
                             "model": model_name,
-                            "error": str(e)
+                            "error": str(e),
+                            "stage": "sub_model"
                         }
                     }
+
+            # 2단계: 메인 판단 모델 호출 (EXAONE)
+            main_model = getattr(self._ensemble, 'MAIN_JUDGE_MODEL', None)
+            if main_model and main_model in self._ensemble.available_models:
+                yield {
+                    "event": "model_started",
+                    "data": {
+                        "model": main_model,
+                        "status": "processing",
+                        "stage": "main_judge"
+                    }
+                }
+
+                start_time = time.time()
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    main_result = await loop.run_in_executor(
+                        None,
+                        lambda: self._ensemble._call_main_judge(stock_data, news_list, model_results, prompt)
+                    )
+
+                    processing_time = time.time() - start_time
+
+                    if main_result and getattr(main_result, 'success', False):
+                        model_results.append(main_result)
+
+                        yield {
+                            "event": "model_completed",
+                            "data": {
+                                "model": main_model,
+                                "result": {
+                                    "signal": getattr(main_result, "signal", "HOLD"),
+                                    "confidence": getattr(main_result, "confidence", 0.0),
+                                    "trend_prediction": getattr(main_result, "trend_prediction", "SIDEWAYS"),
+                                    "reasoning": getattr(main_result, "reasoning", ""),
+                                    "processing_time": processing_time,
+                                    "success": getattr(main_result, "success", True),
+                                    "raw_output": getattr(main_result, "raw_output", ""),
+                                    "error_message": getattr(main_result, "error_message", "")
+                                },
+                                "stage": "main_judge"
+                            }
+                        }
+                    else:
+                        yield {
+                            "event": "model_skipped",
+                            "data": {
+                                "model": main_model,
+                                "reason": "메인 모델 분석 실패 또는 사용 불가",
+                                "stage": "main_judge"
+                            }
+                        }
+
+                except Exception as e:
+                    yield {
+                        "event": "model_error",
+                        "data": {
+                            "model": main_model,
+                            "error": str(e),
+                            "stage": "main_judge"
+                        }
+                    }
+            else:
+                yield {
+                    "event": "model_skipped",
+                    "data": {
+                        "model": main_model or "unknown",
+                        "reason": "메인 판단 모델 사용 불가",
+                        "stage": "main_judge"
+                    }
+                }
 
             # 앙상블 집계
             try:
@@ -289,6 +364,24 @@ class LLMService:
             logger.warning(f"뉴스 조회 실패: {e}")
             return []
 
+    def _safe_float(self, value, default: float = 0.0) -> float:
+        """안전한 float 변환."""
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
+    def _safe_int(self, value, default: int = 0) -> int:
+        """안전한 int 변환."""
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
     def _convert_to_pydantic(
         self,
         original,
@@ -301,46 +394,46 @@ class LLMService:
         model_results = []
         for mr in getattr(original, "model_results", []):
             model_results.append(ModelResult(
-                model_name=getattr(mr, "model_name", "unknown"),
-                signal=getattr(mr, "signal", "HOLD"),
-                confidence=float(getattr(mr, "confidence", 0.0)),
-                trend_prediction=getattr(mr, "trend_prediction", "SIDEWAYS"),
-                entry_price=float(getattr(mr, "entry_price", 0)),
-                stop_loss=float(getattr(mr, "stop_loss", 0)),
-                take_profit=float(getattr(mr, "take_profit", 0)),
-                reasoning=getattr(mr, "reasoning", ""),
-                news_impact=getattr(mr, "news_impact", "NEUTRAL"),
-                risk_factors=list(getattr(mr, "risk_factors", [])),
-                processing_time=float(getattr(mr, "processing_time", 0)),
+                model_name=getattr(mr, "model_name", "unknown") or "unknown",
+                signal=getattr(mr, "signal", "HOLD") or "HOLD",
+                confidence=self._safe_float(getattr(mr, "confidence", 0.0)),
+                trend_prediction=getattr(mr, "trend_prediction", "SIDEWAYS") or "SIDEWAYS",
+                entry_price=self._safe_float(getattr(mr, "entry_price", 0)),
+                stop_loss=self._safe_float(getattr(mr, "stop_loss", 0)),
+                take_profit=self._safe_float(getattr(mr, "take_profit", 0)),
+                reasoning=getattr(mr, "reasoning", "") or "",
+                news_impact=getattr(mr, "news_impact", "NEUTRAL") or "NEUTRAL",
+                risk_factors=list(getattr(mr, "risk_factors", []) or []),
+                processing_time=self._safe_float(getattr(mr, "processing_time", 0)),
                 success=getattr(mr, "success", True),
-                raw_output=getattr(mr, "raw_output", ""),
-                error_message=getattr(mr, "error_message", "")
+                raw_output=getattr(mr, "raw_output", "") or "",
+                error_message=getattr(mr, "error_message", "") or ""
             ))
 
         return EnsembleAnalysisResult(
             id=analysis_id,
             timestamp=datetime.now(),
-            stock_code=getattr(original, "stock_code", stock_data.get("code", "")),
-            stock_name=getattr(original, "stock_name", stock_data.get("name", "")),
-            ensemble_signal=getattr(original, "ensemble_signal", "HOLD"),
-            ensemble_confidence=float(getattr(original, "ensemble_confidence", 0.0)),
-            ensemble_trend=getattr(original, "ensemble_trend", "SIDEWAYS"),
-            current_price=int(stock_data.get("price", 0)),
-            avg_entry_price=float(getattr(original, "avg_entry_price", 0)),
-            avg_stop_loss=float(getattr(original, "avg_stop_loss", 0)),
-            avg_take_profit=float(getattr(original, "avg_take_profit", 0)),
-            signal_votes=dict(getattr(original, "signal_votes", {})),
-            trend_votes=dict(getattr(original, "trend_votes", {})),
+            stock_code=getattr(original, "stock_code", stock_data.get("code", "")) or "",
+            stock_name=getattr(original, "stock_name", stock_data.get("name", "")) or "",
+            ensemble_signal=getattr(original, "ensemble_signal", "HOLD") or "HOLD",
+            ensemble_confidence=self._safe_float(getattr(original, "ensemble_confidence", 0.0)),
+            ensemble_trend=getattr(original, "ensemble_trend", "SIDEWAYS") or "SIDEWAYS",
+            current_price=self._safe_int(stock_data.get("price", 0)),
+            avg_entry_price=self._safe_float(getattr(original, "avg_entry_price", 0)),
+            avg_stop_loss=self._safe_float(getattr(original, "avg_stop_loss", 0)),
+            avg_take_profit=self._safe_float(getattr(original, "avg_take_profit", 0)),
+            signal_votes=dict(getattr(original, "signal_votes", {}) or {}),
+            trend_votes=dict(getattr(original, "trend_votes", {}) or {}),
             model_results=model_results,
-            models_used=list(getattr(original, "models_used", [])),
-            models_agreed=int(getattr(original, "models_agreed", 0)),
-            total_models=int(getattr(original, "total_models", len(model_results))),
-            consensus_score=float(getattr(original, "consensus_score", 0.0)),
-            input_prompt=getattr(original, "input_prompt", ""),
+            models_used=list(getattr(original, "models_used", []) or []),
+            models_agreed=self._safe_int(getattr(original, "models_agreed", 0)),
+            total_models=self._safe_int(getattr(original, "total_models", len(model_results))),
+            consensus_score=self._safe_float(getattr(original, "consensus_score", 0.0)),
+            input_prompt=getattr(original, "input_prompt", "") or "",
             input_data=stock_data,
             news_list=news_list,
             success=getattr(original, "success", True),
-            error_message=getattr(original, "error_message", "")
+            error_message=getattr(original, "error_message", "") or ""
         )
 
     def get_history(self, limit: int = 20) -> List[AnalysisHistoryItem]:

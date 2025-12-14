@@ -140,3 +140,82 @@ export interface SSEEvent {
   event: string;
   data: unknown;
 }
+
+// 자동 트레이딩 타입
+export interface AutoTradeConfig {
+  env_dv: string;
+  max_order_amount: number;
+  min_confidence: number;
+  min_consensus: number;
+  stop_loss_pct: number;
+  take_profit_pct: number;
+  max_daily_trades: number;
+  max_daily_loss: number;
+  min_surge_score: number;
+  max_stocks_per_scan: number;
+  ensemble_models?: string[];
+  main_model?: string;
+}
+
+export interface AutoTradeStatus {
+  is_running: boolean;
+  initialized: boolean;
+  config: AutoTradeConfig | null;
+  today_trades: number;
+  today_pnl: number;
+  today_date: string;
+  can_trade: boolean;
+  market_status: {
+    can_trade: boolean;
+    reason: string;
+  };
+  risk_status: {
+    can_trade: boolean;
+    reason: string;
+  };
+  ensemble_models: string[];
+  main_model: string;
+}
+
+export interface AutoTradeResult {
+  success: boolean;
+  action: string;
+  stock_code: string;
+  stock_name: string;
+  current_price: number;
+  ensemble_signal: string;
+  confidence: number;
+  consensus: number;
+  order_qty: number;
+  order_price: number;
+  order_no?: string;
+  technical_score: number;
+  trend: string;
+  reason: string;
+  timestamp: string;
+}
+
+export interface AutoTradeHistoryItem {
+  timestamp: string;
+  stock_code: string;
+  stock_name: string;
+  action: string;
+  ensemble_signal: string;
+  confidence: number;
+  consensus: number;
+  order_qty: number;
+  order_price: number;
+  order_amount: number;
+  order_no?: string;
+  success: boolean;
+  reason: string;
+  technical_score: number;
+}
+
+export interface AutoTradeHistory {
+  items: AutoTradeHistoryItem[];
+  total_count: number;
+  success_count: number;
+  total_buy_amount: number;
+  total_sell_amount: number;
+}

@@ -1,0 +1,89 @@
+# 자동 매매 설정 파일
+# 2단계 앙상블 LLM 자동 매매 시스템
+
+# 환경 설정
+environment:
+  env_dv: "real"              # 실전투자 전용 (모의투자 미사용)
+  # 계좌 정보는 kis_devlp.yaml에서 자동 로드됩니다
+
+# 주문 설정
+order:
+  max_order_amount: 100000    # 1회 주문 한도 (원)
+  ord_dvsn: "00"              # "00": 지정가, "01": 시장가
+
+# 신뢰도/합의도 설정
+threshold:
+  min_confidence: 0.7         # 최소 신뢰도 (0.0 ~ 1.0)
+  min_consensus: 0.67         # 최소 합의도 (모델 2/3 이상)
+
+# 매매 시그널 설정
+signals:
+  buy:
+    - "STRONG_BUY"
+    - "BUY"
+  sell:
+    - "STRONG_SELL"
+    - "SELL"
+
+# 리스크 관리
+risk:
+  stop_loss_pct: 0.5          # 손절률 (%)
+  take_profit_pct: 1.5        # 익절률 (%)
+  max_daily_trades: 10        # 일일 최대 거래 횟수
+  max_daily_loss: 50000       # 일일 최대 손실 (원)
+
+# 급등 종목 스캔 설정
+scan:
+  min_surge_score: 50.0       # 최소 급등 점수 (0 ~ 100)
+  max_stocks_per_scan: 5      # 스캔당 분석할 최대 종목 수
+  scan_interval: 60           # 스캔 주기 (초)
+
+# 시장 시간 설정
+market:
+  start: "09:00"              # 장 시작 시간
+  end: "15:20"                # 장 마감 시간
+
+# 스캘핑 모드 설정 (09:00 ~ 09:30)
+scalping:
+  enabled: true               # 스캘핑 모드 활성화
+  start: "09:00"              # 스캘핑 시작 시간
+  end: "09:30"                # 스캘핑 종료 시간
+  min_confidence: 0.65        # 스캘핑 최소 신뢰도 (빠른 결정)
+  max_order_amount: 50000     # 스캘핑 1회 주문 한도 (리스크 감소)
+  stop_loss_pct: 0.3          # 스캘핑 손절률 (0.3%, 타이트)
+  take_profit_pct: 0.8        # 스캘핑 익절률 (0.8%, 빠른 익절)
+  use_market_order: true      # 시장가 주문 사용 (빠른 체결)
+
+  # 야간 뉴스 수집 설정
+  overnight_news:
+    enabled: true             # 야간 뉴스 수집 활성화
+    start_time: "15:30"       # 전일 수집 시작 (장 마감 후)
+    end_time: "09:00"         # 금일 수집 종료 (장 시작 전)
+    max_news_count: 20        # 최대 수집 뉴스 수
+    news_depth: 5             # API 페이지 깊이
+
+# 앙상블 모델 설정
+ensemble:
+  # 1단계: 하위 모델 (데이터 탐색)
+  sub_models:
+    - "deepseek-r1:8b"        # 금융 추론 특화
+    - "qwen3:8b"              # 한국어 + 범용
+    - "solar:10.7b"           # 한국어 특화
+
+  # 2단계: 메인 판단 모델
+  main_model: "ingu627/exaone4.0:32b"
+
+  # GPU 메모리 관리
+  use_parallel: false         # 모델 병렬 실행 (VRAM 주의)
+  auto_unload: true           # 분석 후 모델 언로드
+  keep_alive: "5m"            # 모델 유지 시간
+
+# Ollama 설정
+ollama:
+  host: "http://localhost:11434"
+  timeout: 180                # 타임아웃 (초)
+
+# 로깅 설정
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR
+  file: "auto_trader.log"     # 로그 파일 (비어있으면 stdout만)

@@ -5,6 +5,10 @@ import type {
   AnalysisHistoryItem,
   AccountBalance,
   OrdersList,
+  AutoTradeStatus,
+  AutoTradeConfig,
+  AutoTradeResult,
+  AutoTradeHistory,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -104,6 +108,78 @@ export const accountApi = {
 
   getStatus: async () => {
     const { data } = await client.get('/account/status');
+    return data;
+  },
+};
+
+// 자동 트레이딩 API
+export const autoTradeApi = {
+  getStatus: async (): Promise<AutoTradeStatus> => {
+    const { data } = await client.get('/auto-trade/status');
+    return data;
+  },
+
+  start: async (interval = 60, config?: Partial<AutoTradeConfig>) => {
+    const { data } = await client.post('/auto-trade/start', config, {
+      params: { interval },
+    });
+    return data;
+  },
+
+  stop: async () => {
+    const { data } = await client.post('/auto-trade/stop');
+    return data;
+  },
+
+  updateConfig: async (config: Partial<AutoTradeConfig>): Promise<AutoTradeConfig> => {
+    const { data } = await client.put('/auto-trade/config', config);
+    return data;
+  },
+
+  analyze: async (
+    stockCode: string,
+    stockName: string,
+    currentPrice: number,
+    newsList?: string[],
+    skipMarketCheck = false
+  ): Promise<AutoTradeResult> => {
+    const { data } = await client.post('/auto-trade/analyze', {
+      stock_code: stockCode,
+      stock_name: stockName,
+      current_price: currentPrice,
+      news_list: newsList,
+      skip_market_check: skipMarketCheck,
+    });
+    return data;
+  },
+
+  scan: async (
+    minScore?: number,
+    maxStocks?: number,
+    skipMarketCheck = false
+  ): Promise<AutoTradeResult[]> => {
+    const { data } = await client.post('/auto-trade/scan', {
+      min_score: minScore,
+      max_stocks: maxStocks,
+      skip_market_check: skipMarketCheck,
+    });
+    return data;
+  },
+
+  scalping: async (
+    minScore?: number,
+    maxStocks?: number
+  ): Promise<AutoTradeResult[]> => {
+    const { data } = await client.post('/auto-trade/scalping', null, {
+      params: { min_score: minScore, max_stocks: maxStocks },
+    });
+    return data;
+  },
+
+  getHistory: async (limit = 20): Promise<AutoTradeHistory> => {
+    const { data } = await client.get('/auto-trade/history', {
+      params: { limit },
+    });
     return data;
   },
 };
