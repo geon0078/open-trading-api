@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-12-16T08:11:14.707464",
+  "date": "20251216",
+  "news_count": 0,
+  "news_list": [],
+  "analysis": {
+    "sentiment": "NEUTRAL",
+    "confidence": 0.5,
+    "summary": "분석할 야간 뉴스가 없습니다.",
+    "key_factors": [],
+    "recommendation": "신중하게 접근하세요."
+  }
+}

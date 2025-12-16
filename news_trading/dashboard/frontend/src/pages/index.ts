@@ -1,0 +1,13 @@
+export { DashboardPage } from './DashboardPage';
+export { MarketPage } from './MarketPage';
+export { SurgePage } from './SurgePage';
+export { OrderPage } from './OrderPage';
+export { PortfolioPage } from './PortfolioPage';
+export { AutoTradePage } from './AutoTradePage';
+export { IntegratedTradePage } from './IntegratedTradePage';
+export { NewsPage } from './NewsPage';
+export { WatchlistPage } from './WatchlistPage';
+export { HistoryPage } from './HistoryPage';
+export { RankingsPage } from './RankingsPage';
+export { NotificationsPage } from './NotificationsPage';
+export { SettingsPage } from './SettingsPage';
