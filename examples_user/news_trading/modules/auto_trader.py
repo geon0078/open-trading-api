@@ -56,7 +56,7 @@ class AutoTradeConfig:
     # 리스크 관리
     stop_loss_pct: float = 0.5              # 손절률 (0.5%)
     take_profit_pct: float = 1.5            # 익절률 (1.5%)
-    max_daily_trades: int = 10              # 일일 최대 거래 횟수
+    max_daily_trades: int = 0               # 일일 최대 거래 횟수 (0 = 무제한)
     max_daily_loss: int = 50000             # 일일 최대 손실 (5만원)
 
     # 급등 종목 스캔 설정
@@ -138,6 +138,12 @@ class AutoTrader:
         self._ensemble_analyzer = None
         self._order_executor = None
         self._surge_detector = None
+
+        # 마지막 앙상블 분석 결과 (LLM 입출력 저장용)
+        self._last_ensemble_result = None
+
+        # 스캔 중 발생한 모든 앙상블 결과 (stock_code -> ensemble_result)
+        self._scan_ensemble_results = {}
 
     def _ensure_initialized(self):
         """컴포넌트 초기화 확인"""
@@ -235,8 +241,8 @@ class AutoTrader:
         """
         self._reset_daily_counters()
 
-        # 일일 거래 횟수 체크
-        if self._today_trades >= self.config.max_daily_trades:
+        # 일일 거래 횟수 체크 (max_daily_trades <= 0 이면 무제한)
+        if self.config.max_daily_trades > 0 and self._today_trades >= self.config.max_daily_trades:
             return False, f"일일 거래 횟수 초과: {self._today_trades}/{self.config.max_daily_trades}"
 
         # 일일 손실 한도 체크
@@ -353,6 +359,187 @@ class AutoTrader:
 """
         return context
 
+    def run_news_analysis(self, max_news: int = 20) -> Dict:
+        """
+        뉴스 분석 모드 실행 (장 시작 전 분석용)
+
+        전체 뉴스를 수집하고 LLM으로 분석하여 시장 전망 및 주목 종목을 도출합니다.
+
+        Args:
+            max_news: 분석할 최대 뉴스 수
+
+        Returns:
+            Dict: 뉴스 분석 결과
+                - news_count: 분석한 뉴스 수
+                - news_list: 뉴스 제목 리스트
+                - market_sentiment: 시장 심리 (BULLISH/BEARISH/NEUTRAL)
+                - key_themes: 주요 테마 리스트
+                - attention_stocks: 주목 종목 리스트
+                - llm_analysis: LLM 분석 결과
+        """
+        self._ensure_initialized()
+
+        logger.info("=" * 50)
+        logger.info("[뉴스 분석] 장 시작 전 뉴스 분석 시작")
+        logger.info("=" * 50)
+
+        result = {
+            "timestamp": datetime.now().isoformat(),
+            "news_count": 0,
+            "news_list": [],
+            "market_sentiment": "NEUTRAL",
+            "key_themes": [],
+            "attention_stocks": [],
+            "llm_analysis": None
+        }
+
+        # 1. 뉴스 수집
+        try:
+            from .news_collector import NewsCollector
+            collector = NewsCollector()
+
+            # 전체 뉴스 수집 (최대 5페이지)
+            news_df = collector.collect(stock_codes=None, filter_duplicates=False, max_depth=5)
+
+            if news_df.empty:
+                logger.info("[뉴스 분석] 수집된 뉴스 없음")
+                return result
+
+            # 뉴스 제목 컬럼 찾기 (API 응답에 따라 다름)
+            title_col = None
+            for col in ['hts_pbnt_titl_cntt', 'titl', 'titl_cntt', 'cntt', 'news_titl', 'title']:
+                if col in news_df.columns:
+                    title_col = col
+                    break
+
+            if title_col is None:
+                logger.warning(f"[뉴스 분석] 제목 컬럼을 찾을 수 없음. 컬럼: {list(news_df.columns)}")
+                # 첫 번째 문자열 컬럼 사용
+                for col in news_df.columns:
+                    if news_df[col].dtype == 'object':
+                        title_col = col
+                        logger.info(f"[뉴스 분석] '{col}' 컬럼을 제목으로 사용")
+                        break
+
+            # 뉴스 제목 추출
+            if title_col:
+                news_titles = news_df[title_col].tolist()[:max_news]
+            else:
+                news_titles = []
+
+            result["news_count"] = len(news_titles)
+            result["news_list"] = news_titles
+
+            logger.info(f"[뉴스 분석] {len(news_titles)}건 뉴스 수집 완료")
+
+        except ImportError:
+            logger.warning("[뉴스 분석] NewsCollector 모듈 없음")
+            return result
+        except Exception as e:
+            logger.error(f"[뉴스 분석] 뉴스 수집 오류: {e}")
+            return result
+
+        if not news_titles:
+            return result
+
+        # 2. LLM 뉴스 분석
+        try:
+            news_text = "\n".join([f"{i+1}. {title}" for i, title in enumerate(news_titles)])
+
+            analysis_prompt = f"""당신은 한국 주식 시장 전문 애널리스트입니다.
+아래의 최신 뉴스 헤드라인을 분석하고, 오늘 장 시작 전 투자자들이 알아야 할 핵심 정보를 정리해주세요.
+
+=== 오늘의 뉴스 헤드라인 ({len(news_titles)}건) ===
+{news_text}
+
+=== 분석 요청 ===
+1. 시장 심리 판단: BULLISH(강세) / BEARISH(약세) / NEUTRAL(중립) 중 하나
+2. 주요 테마 3가지 (예: 반도체, AI, 금리 등)
+3. 주목해야 할 종목 최대 5개 (종목명과 이유)
+4. 오늘 장 전망 요약 (2-3문장)
+
+반드시 아래 JSON 형식으로 응답하세요:
+{{
+    "market_sentiment": "BULLISH/BEARISH/NEUTRAL 중 하나",
+    "key_themes": ["테마1", "테마2", "테마3"],
+    "attention_stocks": [
+        {{"name": "종목명", "code": "종목코드(알면)", "reason": "주목 이유"}},
+    ],
+    "market_outlook": "오늘 장 전망 요약"
+}}
+"""
+
+            # Ollama API로 직접 뉴스 분석
+            logger.info("[뉴스 분석] LLM 분석 시작...")
+
+            import requests
+
+            model_name = self._ensemble_analyzer.ensemble_models[0] if self._ensemble_analyzer.ensemble_models else "qwen3:8b"
+            ollama_url = self._ensemble_analyzer.ollama_url
+
+            payload = {
+                "model": model_name,
+                "prompt": analysis_prompt,
+                "stream": False,
+                "keep_alive": "5m",
+                "options": {
+                    "temperature": 0.3,
+                    "num_predict": 1000,
+                    "num_ctx": 4096
+                }
+            }
+
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json=payload,
+                timeout=180
+            )
+
+            if response.status_code == 200:
+                raw_output = response.json().get("response", "").strip()
+                logger.info(f"[뉴스 분석] LLM 응답 수신 ({len(raw_output)} chars)")
+
+                # JSON 파싱 시도
+                import json
+                import re
+
+                # <think> 태그 제거
+                raw_output_clean = re.sub(r'<think>.*?</think>', '', raw_output, flags=re.DOTALL)
+
+                # JSON 블록 추출
+                json_match = re.search(r'\{[\s\S]*\}', raw_output_clean)
+                if json_match:
+                    try:
+                        analysis = json.loads(json_match.group())
+                        result["market_sentiment"] = analysis.get("market_sentiment", "NEUTRAL")
+                        result["key_themes"] = analysis.get("key_themes", [])
+                        result["attention_stocks"] = analysis.get("attention_stocks", [])
+                        result["llm_analysis"] = {
+                            "market_outlook": analysis.get("market_outlook", ""),
+                            "raw_output": raw_output,
+                            "model_used": model_name
+                        }
+
+                        logger.info(f"[뉴스 분석] 시장 심리: {result['market_sentiment']}")
+                        logger.info(f"[뉴스 분석] 주요 테마: {result['key_themes']}")
+                        logger.info(f"[뉴스 분석] 주목 종목: {len(result['attention_stocks'])}개")
+
+                    except json.JSONDecodeError:
+                        logger.warning("[뉴스 분석] JSON 파싱 실패, 원본 저장")
+                        result["llm_analysis"] = {"raw_output": raw_output, "model_used": model_name}
+                else:
+                    result["llm_analysis"] = {"raw_output": raw_output, "model_used": model_name}
+            else:
+                logger.error(f"[뉴스 분석] Ollama API 오류: {response.status_code}")
+
+        except Exception as e:
+            logger.error(f"[뉴스 분석] LLM 분석 오류: {e}")
+
+        logger.info("[뉴스 분석] 분석 완료")
+        logger.info("=" * 50)
+
+        return result
+
     def run_scalping_trade(
         self,
         stock_codes: List[str] = None,
@@ -374,6 +561,9 @@ class AutoTrader:
             List[AutoTradeResult]: 스캘핑 매매 결과 리스트
         """
         self._ensure_initialized()
+
+        # 스캔 시작 시 앙상블 결과 초기화
+        self._scan_ensemble_results = {}
 
         if not self._is_scalping_time():
             logger.info("[Scalping] 스캘핑 시간이 아닙니다")
@@ -437,9 +627,17 @@ class AutoTrader:
                 logger.info(f"[Scalping] 거래 중단: {reason}")
                 break
 
-            stock_code = stock.get('code', '')
-            stock_name = stock.get('name', '')
-            current_price = int(stock.get('price', 0))
+            # SurgeCandidate 객체와 dict 모두 처리
+            if hasattr(stock, 'code'):
+                # SurgeCandidate 객체
+                stock_code = stock.code
+                stock_name = stock.name
+                current_price = int(stock.price)
+            else:
+                # 딕셔너리
+                stock_code = stock.get('code', '')
+                stock_name = stock.get('name', '')
+                current_price = int(stock.get('price', 0))
 
             if not stock_code:
                 continue
@@ -502,6 +700,11 @@ class AutoTrader:
                 parallel=self.config.use_parallel,
                 unload_after=self.config.auto_unload
             )
+
+            # LLM 입출력 저장용으로 마지막 분석 결과 보관
+            self._last_ensemble_result = ensemble_result
+            # 스캔 결과에도 저장 (stock_code를 key로)
+            self._scan_ensemble_results[stock_code] = ensemble_result
 
             # 기술적 지표 요약
             tech_summary = ensemble_result.input_data.get('technical_summary', {})
@@ -574,7 +777,8 @@ class AutoTrader:
         stock_data: Dict = None,
         news_list: List[str] = None,
         check_market_hours: bool = True,
-        check_risk_limits: bool = True
+        check_risk_limits: bool = True,
+        analysis_only: bool = False
     ) -> AutoTradeResult:
         """
         분석 및 자동 매매 실행
@@ -587,6 +791,7 @@ class AutoTrader:
             news_list: 관련 뉴스 리스트
             check_market_hours: 장 시간 체크 여부
             check_risk_limits: 리스크 한도 체크 여부
+            analysis_only: True이면 분석만 실행하고 주문은 건너뜀 (장 시작 전 분석 모드)
 
         Returns:
             AutoTradeResult: 자동 매매 결과
@@ -639,6 +844,11 @@ class AutoTrader:
                 unload_after=self.config.auto_unload
             )
 
+            # LLM 입출력 저장용으로 마지막 분석 결과 보관
+            self._last_ensemble_result = ensemble_result
+            # 스캔 결과에도 저장 (stock_code를 key로)
+            self._scan_ensemble_results[stock_code] = ensemble_result
+
             # 기술적 지표 요약
             tech_summary = ensemble_result.input_data.get('technical_summary', {})
             tech_score = tech_summary.get('total_score', 0)
@@ -650,41 +860,61 @@ class AutoTrader:
                        f"기술점수={tech_score:+.1f}")
 
             # ========== 자동 매매 실행 ==========
-            order_result = self._order_executor.execute_auto_trade(
-                ensemble_result=ensemble_result,
-                max_order_amount=self.config.max_order_amount,
-                min_confidence=self.config.min_confidence,
-                min_consensus=self.config.min_consensus,
-                allowed_buy_signals=self.config.allowed_buy_signals,
-                allowed_sell_signals=self.config.allowed_sell_signals,
-                use_entry_price=True,
-                ord_dvsn=self.config.ord_dvsn
-            )
-
-            # 결과 생성
-            if order_result.success:
-                action = order_result.order_type.upper()
-                self._today_trades += 1
-                logger.info(f"[AutoTrader] 주문 성공: {action} {order_result.order_qty}주 @ {order_result.order_price:,}원")
+            if analysis_only:
+                # 분석 전용 모드: 주문 없이 분석 결과만 반환
+                logger.info(f"[AutoTrader] 분석 전용 모드 - 주문 건너뜀")
+                result = AutoTradeResult(
+                    success=False,
+                    action="ANALYSIS",
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    ensemble_signal=ensemble_result.ensemble_signal,
+                    confidence=ensemble_result.ensemble_confidence,
+                    consensus=ensemble_result.consensus_score,
+                    order_qty=0,
+                    order_price=0,
+                    order_no=None,
+                    reason="[분석 전용] 장 시작 전 분석 완료",
+                    technical_score=tech_score,
+                    trend=trend
+                )
             else:
-                action = order_result.order_type.upper() if order_result.order_type else "SKIP"
+                order_result = self._order_executor.execute_auto_trade(
+                    ensemble_result=ensemble_result,
+                    max_order_amount=self.config.max_order_amount,
+                    min_confidence=self.config.min_confidence,
+                    min_consensus=self.config.min_consensus,
+                    allowed_buy_signals=self.config.allowed_buy_signals,
+                    allowed_sell_signals=self.config.allowed_sell_signals,
+                    use_entry_price=True,
+                    ord_dvsn=self.config.ord_dvsn
+                )
 
-            result = AutoTradeResult(
-                success=order_result.success,
-                action=action,
-                stock_code=stock_code,
-                stock_name=stock_name,
-                current_price=current_price,
-                ensemble_signal=ensemble_result.ensemble_signal,
-                confidence=ensemble_result.ensemble_confidence,
-                consensus=ensemble_result.consensus_score,
-                order_qty=order_result.order_qty,
-                order_price=order_result.order_price,
-                order_no=order_result.order_no,
-                reason=order_result.message,
-                technical_score=tech_score,
-                trend=trend
-            )
+                # 결과 생성
+                if order_result.success:
+                    action = order_result.order_type.upper()
+                    self._today_trades += 1
+                    logger.info(f"[AutoTrader] 주문 성공: {action} {order_result.order_qty}주 @ {order_result.order_price:,}원")
+                else:
+                    action = order_result.order_type.upper() if order_result.order_type else "SKIP"
+
+                result = AutoTradeResult(
+                    success=order_result.success,
+                    action=action,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    ensemble_signal=ensemble_result.ensemble_signal,
+                    confidence=ensemble_result.ensemble_confidence,
+                    consensus=ensemble_result.consensus_score,
+                    order_qty=order_result.order_qty,
+                    order_price=order_result.order_price,
+                    order_no=order_result.order_no,
+                    reason=order_result.message,
+                    technical_score=tech_score,
+                    trend=trend
+                )
 
             # 히스토리 저장
             self._trade_history.append(result)
@@ -709,7 +939,8 @@ class AutoTrader:
         self,
         min_score: float = None,
         max_stocks: int = None,
-        check_market_hours: bool = True
+        check_market_hours: bool = True,
+        analysis_only: bool = False
     ) -> List[AutoTradeResult]:
         """
         급등 종목 스캔 후 자동 매매
@@ -718,29 +949,34 @@ class AutoTrader:
             min_score: 최소 급등 점수 (None이면 config 사용)
             max_stocks: 분석할 최대 종목 수 (None이면 config 사용)
             check_market_hours: 장 시간 체크 여부
+            analysis_only: True이면 분석만 실행하고 주문은 건너뜀 (장 시작 전 분석 모드)
 
         Returns:
             List[AutoTradeResult]: 자동 매매 결과 리스트
         """
         self._ensure_initialized()
 
+        # 스캔 시작 시 앙상블 결과 초기화
+        self._scan_ensemble_results = {}
+
         if min_score is None:
             min_score = self.config.min_surge_score
         if max_stocks is None:
             max_stocks = self.config.max_stocks_per_scan
 
-        # 장 시간 체크
-        if check_market_hours:
+        # 장 시간 체크 (분석 전용 모드에서는 건너뜀)
+        if check_market_hours and not analysis_only:
             can_trade, reason = self._check_market_hours()
             if not can_trade:
                 logger.info(f"[AutoTrader] 거래 불가: {reason}")
                 return []
 
-        # 리스크 한도 체크
-        can_trade, reason = self._check_risk_limits()
-        if not can_trade:
-            logger.info(f"[AutoTrader] 거래 불가: {reason}")
-            return []
+        # 리스크 한도 체크 (분석 전용 모드에서는 건너뜀)
+        if not analysis_only:
+            can_trade, reason = self._check_risk_limits()
+            if not can_trade:
+                logger.info(f"[AutoTrader] 거래 불가: {reason}")
+                return []
 
         # 급등 종목 스캔
         if self._surge_detector is None:
@@ -764,15 +1000,24 @@ class AutoTrader:
         # 상위 종목만 분석
         results = []
         for stock in surge_stocks[:max_stocks]:
-            # 리스크 한도 재확인
-            can_trade, reason = self._check_risk_limits()
-            if not can_trade:
-                logger.info(f"[AutoTrader] 거래 중단: {reason}")
-                break
+            # 리스크 한도 재확인 (분석 전용 모드에서는 건너뜀)
+            if not analysis_only:
+                can_trade, reason = self._check_risk_limits()
+                if not can_trade:
+                    logger.info(f"[AutoTrader] 거래 중단: {reason}")
+                    break
 
-            stock_code = stock.get('code', '')
-            stock_name = stock.get('name', '')
-            current_price = int(stock.get('price', 0))
+            # SurgeCandidate 객체와 dict 모두 처리
+            if hasattr(stock, 'code'):
+                # SurgeCandidate 객체
+                stock_code = stock.code
+                stock_name = stock.name
+                current_price = int(stock.price)
+            else:
+                # 딕셔너리
+                stock_code = stock.get('code', '')
+                stock_name = stock.get('name', '')
+                current_price = int(stock.get('price', 0))
 
             if not stock_code or current_price <= 0:
                 continue
@@ -783,7 +1028,8 @@ class AutoTrader:
                 current_price=current_price,
                 stock_data=stock,
                 check_market_hours=False,  # 이미 체크함
-                check_risk_limits=False    # 이미 체크함
+                check_risk_limits=False,   # 이미 체크함
+                analysis_only=analysis_only
             )
             results.append(result)
 
@@ -799,6 +1045,27 @@ class AutoTrader:
     def get_trade_history(self, limit: int = 20) -> List[AutoTradeResult]:
         """거래 히스토리 조회"""
         return list(self._trade_history)[-limit:]
+
+    def get_ensemble_result(self, stock_code: str):
+        """
+        특정 종목의 앙상블 분석 결과 조회 (LLM 입출력 저장용)
+
+        Args:
+            stock_code: 종목코드
+
+        Returns:
+            앙상블 분석 결과 또는 None
+        """
+        return self._scan_ensemble_results.get(stock_code)
+
+    def get_all_ensemble_results(self) -> Dict:
+        """
+        현재 스캔의 모든 앙상블 분석 결과 조회 (LLM 입출력 저장용)
+
+        Returns:
+            Dict[stock_code, ensemble_result]
+        """
+        return self._scan_ensemble_results.copy()
 
     def get_status(self) -> Dict:
         """현재 상태 조회"""

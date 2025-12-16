@@ -9,6 +9,8 @@ import type {
   AutoTradeConfig,
   AutoTradeResult,
   AutoTradeHistory,
+  NewsAnalysisResult,
+  TradingMode,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -179,6 +181,19 @@ export const autoTradeApi = {
   getHistory: async (limit = 20): Promise<AutoTradeHistory> => {
     const { data } = await client.get('/auto-trade/history', {
       params: { limit },
+    });
+    return data;
+  },
+
+  // 뉴스 분석 API
+  getMode: async (): Promise<TradingMode> => {
+    const { data } = await client.get('/auto-trade/mode');
+    return data;
+  },
+
+  runNewsAnalysis: async (maxNews = 30): Promise<NewsAnalysisResult> => {
+    const { data } = await client.post('/auto-trade/news-analysis', null, {
+      params: { max_news: maxNews },
     });
     return data;
   },

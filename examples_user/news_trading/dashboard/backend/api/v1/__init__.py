@@ -8,6 +8,8 @@ from .llm import router as llm_router
 from .account import router as account_router
 from .stream import router as stream_router
 from .auto_trade import router as auto_trade_router
+from .ws import router as ws_router
+from .position import router as position_router
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -16,3 +18,5 @@ api_router.include_router(llm_router, prefix="/llm", tags=["llm"])
 api_router.include_router(account_router, prefix="/account", tags=["account"])
 api_router.include_router(stream_router, prefix="/stream", tags=["stream"])
 api_router.include_router(auto_trade_router, prefix="/auto-trade", tags=["auto-trade"])
+api_router.include_router(ws_router, prefix="/ws", tags=["websocket"])
+api_router.include_router(position_router, prefix="/position", tags=["position"])

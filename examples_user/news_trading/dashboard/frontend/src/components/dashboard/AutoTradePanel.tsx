@@ -11,6 +11,8 @@ import {
   Zap,
   TrendingUp,
   TrendingDown,
+  Newspaper,
+  Clock,
 } from 'lucide-react';
 import { useDashboardStore } from '../../store';
 import { autoTradeApi } from '../../api/client';
@@ -300,10 +302,12 @@ export function AutoTradePanel() {
     autoTradeHistory,
     isAutoTrading,
     lastAutoTradeUpdate,
+    tradingMode,
     setAutoTradeStatus,
     setAutoTradeResults,
     setAutoTradeHistory,
     setIsAutoTrading,
+    setTradingMode,
   } = useDashboardStore();
 
   const [showConfig, setShowConfig] = useState(false);
@@ -314,12 +318,16 @@ export function AutoTradePanel() {
   // 상태 로드
   const loadStatus = useCallback(async () => {
     try {
-      const status = await autoTradeApi.getStatus();
+      const [status, mode] = await Promise.all([
+        autoTradeApi.getStatus(),
+        autoTradeApi.getMode(),
+      ]);
       setAutoTradeStatus(status);
+      setTradingMode(mode);
     } catch (error) {
       console.error('상태 로드 실패:', error);
     }
-  }, [setAutoTradeStatus]);
+  }, [setAutoTradeStatus, setTradingMode]);
 
   // 히스토리 로드
   const loadHistory = useCallback(async () => {
@@ -430,6 +438,24 @@ export function AutoTradePanel() {
           </button>
         </div>
       </div>
+
+      {/* 현재 모드 표시 */}
+      {tradingMode && (
+        <div className="px-4 py-2 border-b border-gray-700 flex items-center justify-between bg-gray-800/50">
+          <div className="flex items-center gap-2">
+            {tradingMode.mode === 'NEWS' ? (
+              <Newspaper className="w-4 h-4 text-blue-400" />
+            ) : (
+              <Zap className="w-4 h-4 text-yellow-400" />
+            )}
+            <span className="text-sm">{tradingMode.mode_description}</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <Clock className="w-3 h-3" />
+            <span>{tradingMode.market_status}</span>
+          </div>
+        </div>
+      )}
 
       {/* 상태 요약 */}
       <div className="px-4 py-3 border-b border-gray-700 space-y-2">

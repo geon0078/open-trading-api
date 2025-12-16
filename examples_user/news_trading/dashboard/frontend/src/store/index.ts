@@ -7,7 +7,35 @@ import type {
   AutoTradeStatus,
   AutoTradeResult,
   AutoTradeHistoryItem,
+  NewsAnalysisResult,
+  TradingMode,
 } from '../types';
+
+// LLM 실시간 출력 타입
+export interface LLMOutput {
+  stock_code: string;
+  stock_name: string;
+  model_name: string;
+  output_type: 'thinking' | 'response' | 'signal' | 'error' | 'start' | 'complete';
+  content: string;
+  timestamp: string;
+}
+
+// 포지션 알림 타입
+export interface PositionAlert {
+  stock_code: string;
+  stock_name: string;
+  alert_type: 'stop_loss' | 'take_profit' | 'warning';
+  avg_price: number;
+  current_price: number;
+  quantity: number;
+  pnl: number;
+  pnl_rate: number;
+  threshold: number;
+  action_taken: string;
+  order_no?: string;
+  timestamp: string;
+}
 
 interface DashboardState {
   // 연결 상태
@@ -28,6 +56,13 @@ interface DashboardState {
     status: string;
   } | null;
 
+  // LLM 실시간 출력
+  llmOutputs: LLMOutput[];
+  currentLLMStock: { code: string; name: string } | null;
+
+  // 포지션 알림
+  positionAlerts: PositionAlert[];
+
   // 계좌
   accountBalance: AccountBalance | null;
   todayOrders: Order[];
@@ -43,6 +78,12 @@ interface DashboardState {
   isAutoTrading: boolean;
   lastAutoTradeUpdate: Date | null;
 
+  // 뉴스 분석
+  tradingMode: TradingMode | null;
+  newsAnalysis: NewsAnalysisResult | null;
+  isAnalyzingNews: boolean;
+  lastNewsUpdate: Date | null;
+
   // Actions
   setSurgeCandidates: (candidates: SurgeCandidate[]) => void;
   setIsScanning: (scanning: boolean) => void;
@@ -55,12 +96,25 @@ interface DashboardState {
   setSelectedStock: (stock: SurgeCandidate | null) => void;
   updateConnectionStatus: (type: 'ws' | 'sse', connected: boolean) => void;
 
+  // LLM Output Actions
+  addLLMOutput: (output: LLMOutput) => void;
+  clearLLMOutputs: () => void;
+
+  // Position Alert Actions
+  addPositionAlert: (alert: PositionAlert) => void;
+  clearPositionAlerts: () => void;
+
   // Auto Trade Actions
   setAutoTradeStatus: (status: AutoTradeStatus) => void;
   setAutoTradeHistory: (history: AutoTradeHistoryItem[]) => void;
   addAutoTradeResult: (result: AutoTradeResult) => void;
   setAutoTradeResults: (results: AutoTradeResult[]) => void;
   setIsAutoTrading: (trading: boolean) => void;
+
+  // News Analysis Actions
+  setTradingMode: (mode: TradingMode) => void;
+  setNewsAnalysis: (analysis: NewsAnalysisResult) => void;
+  setIsAnalyzingNews: (analyzing: boolean) => void;
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
@@ -74,6 +128,9 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   currentAnalysis: null,
   isAnalyzing: false,
   analysisProgress: null,
+  llmOutputs: [],
+  currentLLMStock: null,
+  positionAlerts: [],
   accountBalance: null,
   todayOrders: [],
   lastAccountUpdate: null,
@@ -83,6 +140,10 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   autoTradeResults: [],
   isAutoTrading: false,
   lastAutoTradeUpdate: null,
+  tradingMode: null,
+  newsAnalysis: null,
+  isAnalyzingNews: false,
+  lastNewsUpdate: null,
 
   // Actions
   setSurgeCandidates: (candidates) =>
@@ -120,6 +181,38 @@ export const useDashboardStore = create<DashboardState>((set) => ({
       [type === 'ws' ? 'wsConnected' : 'sseConnected']: connected,
     }),
 
+  // LLM Output Actions
+  addLLMOutput: (output) =>
+    set((state) => {
+      // 새로운 종목이면 이전 출력 초기화
+      const isNewStock =
+        state.currentLLMStock?.code !== output.stock_code;
+
+      return {
+        llmOutputs: isNewStock
+          ? [output]
+          : [...state.llmOutputs, output].slice(-100), // 최대 100개
+        currentLLMStock: {
+          code: output.stock_code,
+          name: output.stock_name,
+        },
+      };
+    }),
+
+  clearLLMOutputs: () =>
+    set({
+      llmOutputs: [],
+      currentLLMStock: null,
+    }),
+
+  // Position Alert Actions
+  addPositionAlert: (alert) =>
+    set((state) => ({
+      positionAlerts: [alert, ...state.positionAlerts].slice(0, 50),
+    })),
+
+  clearPositionAlerts: () => set({ positionAlerts: [] }),
+
   // Auto Trade Actions
   setAutoTradeStatus: (status) =>
     set({
@@ -143,4 +236,20 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     }),
 
   setIsAutoTrading: (trading) => set({ isAutoTrading: trading }),
+
+  // News Analysis Actions
+  setTradingMode: (mode) =>
+    set({
+      tradingMode: mode,
+      newsAnalysis: mode.last_news_analysis,
+      lastNewsUpdate: new Date(),
+    }),
+
+  setNewsAnalysis: (analysis) =>
+    set({
+      newsAnalysis: analysis,
+      lastNewsUpdate: new Date(),
+    }),
+
+  setIsAnalyzingNews: (analyzing) => set({ isAnalyzingNews: analyzing }),
 }));

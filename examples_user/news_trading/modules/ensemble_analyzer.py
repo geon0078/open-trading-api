@@ -150,7 +150,8 @@ class EnsembleLLMAnalyzer:
         self,
         ollama_url: str = "http://localhost:11434",
         keep_alive: str = "5m",
-        auto_unload: bool = True
+        auto_unload: bool = True,
+        on_llm_output: Optional[callable] = None
     ):
         """
         앙상블 LLM 분석기 초기화
@@ -159,10 +160,12 @@ class EnsembleLLMAnalyzer:
             ollama_url: Ollama API URL
             keep_alive: 모델 유지 시간 (기본: 5분, "0"=즉시 언로드, "-1"=영구 유지)
             auto_unload: 분석 완료 후 자동 언로드 여부
+            on_llm_output: LLM 출력 콜백 함수 (WebSocket 브로드캐스트용)
         """
         self.ollama_url = ollama_url
         self.keep_alive = keep_alive
         self.auto_unload = auto_unload
+        self.on_llm_output = on_llm_output  # LLM 출력 콜백
         self.available_models: List[str] = []
         self.ensemble_models: List[str] = []  # 앙상블에 사용할 모델
         self.model_weights: Dict[str, float] = {}  # 모델별 가중치
@@ -170,6 +173,10 @@ class EnsembleLLMAnalyzer:
         self.max_history = 50
         self._lock = threading.Lock()
         self._loaded_models: List[str] = []  # 현재 로드된 모델 추적
+
+        # 현재 분석 중인 종목 정보 (WebSocket 브로드캐스트용)
+        self._current_stock_code = ""
+        self._current_stock_name = ""
 
     def discover_models(self) -> List[str]:
         """사용 가능한 모델 탐색 (제외 모델 필터링)"""
@@ -811,6 +818,16 @@ class EnsembleLLMAnalyzer:
         Returns:
             EnsembleAnalysis: 앙상블 분석 결과
         """
+        # 현재 분석 중인 종목 정보 설정 (WebSocket 브로드캐스트용)
+        self._current_stock_code = stock_code
+        self._current_stock_name = stock_name
+
+        # 분석 시작 브로드캐스트
+        self._broadcast_llm_output("system", "analysis_start",
+            f"{stock_name}({stock_code}) 분석 시작",
+            current_price=current_price
+        )
+
         # OHLCV 및 기술적 지표 조회
         technical_summary = {}
         ohlcv_text = ""
@@ -835,8 +852,15 @@ class EnsembleLLMAnalyzer:
             except Exception as e:
                 logger.error(f"[{stock_name}] 기술적 지표 조회 실패: {e}")
 
-        # 기본 stock_data 구성
+        # 기본 stock_data 구성 (SurgeCandidate 객체도 처리)
         if stock_data is None:
+            stock_data = {}
+        elif hasattr(stock_data, '__dataclass_fields__'):
+            # dataclass 객체인 경우 딕셔너리로 변환
+            from dataclasses import asdict
+            stock_data = asdict(stock_data)
+        elif not isinstance(stock_data, dict):
+            # 기타 객체인 경우 새 딕셔너리 생성
             stock_data = {}
 
         stock_data.update({
@@ -938,9 +962,27 @@ class EnsembleLLMAnalyzer:
             return default
         return str(value)
 
+    def _broadcast_llm_output(self, model_name: str, output_type: str, content: str, **kwargs):
+        """LLM 출력을 콜백으로 전달 (WebSocket 브로드캐스트용)"""
+        if self.on_llm_output:
+            try:
+                self.on_llm_output(
+                    stock_code=self._current_stock_code,
+                    stock_name=self._current_stock_name,
+                    model_name=model_name,
+                    output_type=output_type,
+                    content=content,
+                    **kwargs
+                )
+            except Exception as e:
+                logger.warning(f"LLM 출력 브로드캐스트 실패: {e}")
+
     def _call_single_model(self, model_name: str, prompt: str, max_retries: int = 2) -> ModelResult:
         """단일 모델 호출 (재시도 로직 포함, GPU 메모리 관리 적용)"""
         start_time = time.time()
+
+        # 분석 시작 브로드캐스트
+        self._broadcast_llm_output(model_name, "start", f"{model_name} 분석 시작...")
 
         payload = {
             "model": model_name,
@@ -971,21 +1013,38 @@ class EnsembleLLMAnalyzer:
 
                     if not raw_output:
                         logger.warning(f"  [{model_name}] 빈 응답 수신, done={response_json.get('done')}")
+                        self._broadcast_llm_output(model_name, "warning", "빈 응답 수신")
                     else:
                         logger.debug(f"  [{model_name}] 응답 수신: {len(raw_output)} chars")
+                        # 원본 응답 브로드캐스트
+                        self._broadcast_llm_output(model_name, "response", raw_output)
 
                     parsed = self._parse_json_response(raw_output)
                     processing_time = time.time() - start_time
 
+                    # 파싱 결과 브로드캐스트
+                    signal = self._safe_str(parsed.get("signal"), "HOLD")
+                    confidence = self._safe_float(parsed.get("confidence"), 0.0)
+                    reasoning = self._safe_str(parsed.get("reasoning"), "")
+
+                    self._broadcast_llm_output(
+                        model_name, "signal",
+                        f"시그널: {signal}, 신뢰도: {confidence * 100:.0f}%",
+                        signal=signal,
+                        confidence=confidence,
+                        reasoning=reasoning,
+                        processing_time=processing_time
+                    )
+
                     return ModelResult(
                         model_name=model_name,
-                        signal=self._safe_str(parsed.get("signal"), "HOLD"),
-                        confidence=self._safe_float(parsed.get("confidence"), 0.0),
+                        signal=signal,
+                        confidence=confidence,
                         trend_prediction=self._safe_str(parsed.get("trend_prediction"), "SIDEWAYS"),
                         entry_price=self._safe_float(parsed.get("entry_price"), 0.0),
                         stop_loss=self._safe_float(parsed.get("stop_loss"), 0.0),
                         take_profit=self._safe_float(parsed.get("take_profit"), 0.0),
-                        reasoning=self._safe_str(parsed.get("reasoning"), ""),
+                        reasoning=reasoning,
                         news_impact=self._safe_str(parsed.get("news_impact"), "NEUTRAL"),
                         risk_factors=parsed.get("risk_factors") or [],
                         processing_time=processing_time,

@@ -2,27 +2,35 @@ import { useState } from 'react';
 import { Activity, Wifi, WifiOff, LayoutGrid, Zap } from 'lucide-react';
 import { useDashboardStore } from './store';
 import { useSSE } from './hooks/useSSE';
+import { useWebSocket } from './hooks/useWebSocket';
 import { SurgePanel } from './components/dashboard/SurgePanel';
 import { LLMPanel } from './components/dashboard/LLMPanel';
 import { AccountPanel } from './components/dashboard/AccountPanel';
 import { AutoTradePanel } from './components/dashboard/AutoTradePanel';
+import { NewsAnalysisPanel } from './components/dashboard/NewsAnalysisPanel';
+import { LLMOutputPanel } from './components/dashboard/LLMOutputPanel';
 
 function ConnectionStatus() {
-  const { sseConnected } = useDashboardStore();
+  const { sseConnected, wsConnected } = useDashboardStore();
 
   return (
-    <div className="flex items-center gap-2">
-      {sseConnected ? (
-        <>
-          <Wifi className="w-4 h-4 text-green-400" />
-          <span className="text-sm text-green-400">연결됨</span>
-        </>
-      ) : (
-        <>
-          <WifiOff className="w-4 h-4 text-red-400" />
-          <span className="text-sm text-red-400">연결 끊김</span>
-        </>
-      )}
+    <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1">
+        <span className="text-xs text-gray-500">SSE:</span>
+        {sseConnected ? (
+          <Wifi className="w-3 h-3 text-green-400" />
+        ) : (
+          <WifiOff className="w-3 h-3 text-red-400" />
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-xs text-gray-500">WS:</span>
+        {wsConnected ? (
+          <Wifi className="w-3 h-3 text-green-400" />
+        ) : (
+          <WifiOff className="w-3 h-3 text-yellow-400" />
+        )}
+      </div>
     </div>
   );
 }
@@ -109,13 +117,23 @@ function MonitorView() {
 function AutoTradeView() {
   return (
     <div className="grid grid-cols-12 gap-4 h-full">
-      {/* 왼쪽: 자동 매매 */}
-      <div className="col-span-8 h-full">
-        <AutoTradePanel />
+      {/* 왼쪽: 자동 매매 + LLM 출력 */}
+      <div className="col-span-5 h-full flex flex-col gap-4">
+        <div className="flex-[2]">
+          <AutoTradePanel />
+        </div>
+        <div className="flex-1">
+          <LLMOutputPanel />
+        </div>
       </div>
 
-      {/* 오른쪽: 계좌 정보 */}
-      <div className="col-span-4 h-full flex flex-col gap-4">
+      {/* 중앙: 뉴스 분석 */}
+      <div className="col-span-4 h-full">
+        <NewsAnalysisPanel />
+      </div>
+
+      {/* 오른쪽: 계좌 정보 + 급등 종목 */}
+      <div className="col-span-3 h-full flex flex-col gap-4">
         <div className="flex-1">
           <AccountPanel />
         </div>
@@ -140,6 +158,9 @@ export default function App() {
 
   // SSE 연결 초기화
   useSSE();
+
+  // WebSocket 연결 초기화 (계좌 업데이트, LLM 출력 등)
+  useWebSocket();
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col">

@@ -130,7 +130,7 @@ class OrderExecutor:
             ...     print(f"주문 성공: {result.order_no}")
         """
         try:
-            from domestic_stock.order_cash import order_cash
+            from domestic_stock.order_cash.order_cash import order_cash
         except ImportError:
             logger.error("domestic_stock.order_cash 모듈을 찾을 수 없습니다.")
             return OrderResult(

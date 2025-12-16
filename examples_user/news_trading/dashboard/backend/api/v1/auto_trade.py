@@ -21,6 +21,9 @@ from models.auto_trade import (
     AutoTradeHistoryItem,
     SingleStockAnalyzeRequest,
     ScanAndTradeRequest,
+    NewsAnalysisResult,
+    AttentionStock,
+    TradingMode,
 )
 from core.auto_trade_service import get_auto_trade_service
 
@@ -52,6 +55,76 @@ async def get_auto_trade_status():
         risk_status=status.get("risk_status", {}),
         ensemble_models=status.get("ensemble_models", []),
         main_model=status.get("main_model", ""),
+    )
+
+
+@router.get("/mode", response_model=TradingMode)
+async def get_trading_mode():
+    """
+    현재 트레이딩 모드 조회
+
+    Returns:
+        TradingMode: 현재 모드 (NEWS, TRADING, IDLE)
+    """
+    service = get_auto_trade_service()
+    mode = await service.get_trading_mode()
+
+    last_news = mode.get("last_news_analysis")
+    news_result = None
+    if last_news:
+        attention_stocks = [
+            AttentionStock(**s) if isinstance(s, dict) else s
+            for s in last_news.get("attention_stocks", [])
+        ]
+        news_result = NewsAnalysisResult(
+            news_count=last_news.get("news_count", 0),
+            market_sentiment=last_news.get("market_sentiment", "NEUTRAL"),
+            key_themes=last_news.get("key_themes", []),
+            attention_stocks=attention_stocks,
+            market_outlook=last_news.get("llm_analysis", {}).get("market_outlook", ""),
+            news_list=last_news.get("news_list", []),
+            analysis_time=last_news.get("analysis_time", ""),
+        )
+
+    return TradingMode(
+        mode=mode.get("mode", "INIT"),
+        mode_description=mode.get("mode_description", ""),
+        market_status=mode.get("market_status", ""),
+        next_scan_time=mode.get("next_scan_time", ""),
+        last_news_analysis=news_result,
+    )
+
+
+@router.post("/news-analysis", response_model=NewsAnalysisResult)
+async def run_news_analysis(max_news: int = 30):
+    """
+    뉴스 분석 실행
+
+    장 시작 전 뉴스를 수집하고 LLM으로 분석합니다.
+
+    Args:
+        max_news: 분석할 최대 뉴스 수 (기본: 30)
+
+    Returns:
+        NewsAnalysisResult: 뉴스 분석 결과
+    """
+    service = get_auto_trade_service()
+    result = await service.run_news_analysis(max_news=max_news)
+
+    attention_stocks = [
+        AttentionStock(**s) if isinstance(s, dict) else s
+        for s in result.get("attention_stocks", [])
+    ]
+
+    return NewsAnalysisResult(
+        news_count=result.get("news_count", 0),
+        market_sentiment=result.get("market_sentiment", "NEUTRAL"),
+        key_themes=result.get("key_themes", []),
+        attention_stocks=attention_stocks,
+        market_outlook=result.get("llm_analysis", {}).get("market_outlook", ""),
+        news_list=result.get("news_list", []),
+        analysis_time=result.get("analysis_time", ""),
+        llm_raw_output=result.get("llm_analysis", {}).get("raw_output", ""),
     )
 
 

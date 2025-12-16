@@ -29,7 +29,7 @@ signals:
 risk:
   stop_loss_pct: 0.5          # 손절률 (%)
   take_profit_pct: 1.5        # 익절률 (%)
-  max_daily_trades: 10        # 일일 최대 거래 횟수
+  max_daily_trades: 0         # 일일 최대 거래 횟수 (0 = 무제한)
   max_daily_loss: 50000       # 일일 최대 손실 (원)
 
 # 급등 종목 스캔 설정
@@ -68,7 +68,6 @@ ensemble:
   sub_models:
     - "deepseek-r1:8b"        # 금융 추론 특화
     - "qwen3:8b"              # 한국어 + 범용
-    - "solar:10.7b"           # 한국어 특화
 
   # 2단계: 메인 판단 모델
   main_model: "ingu627/exaone4.0:32b"

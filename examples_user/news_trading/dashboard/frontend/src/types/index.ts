@@ -219,3 +219,29 @@ export interface AutoTradeHistory {
   total_buy_amount: number;
   total_sell_amount: number;
 }
+
+// 뉴스 분석 타입
+export interface AttentionStock {
+  code: string;
+  name: string;
+  reason: string;
+}
+
+export interface NewsAnalysisResult {
+  news_count: number;
+  market_sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  key_themes: string[];
+  attention_stocks: AttentionStock[];
+  market_outlook: string;
+  news_list: string[];
+  analysis_time: string;
+  llm_raw_output?: string;
+}
+
+export interface TradingMode {
+  mode: 'INIT' | 'NEWS' | 'TRADING' | 'IDLE';
+  mode_description: string;
+  market_status: string;
+  next_scan_time: string;
+  last_news_analysis: NewsAnalysisResult | null;
+}

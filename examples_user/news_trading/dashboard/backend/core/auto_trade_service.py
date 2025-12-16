@@ -8,14 +8,24 @@
 import sys
 import asyncio
 import logging
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, List, AsyncGenerator, Callable
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 경로 설정
 sys.path.extend(['../../../modules', '../../..', '../..'])
 
 logger = logging.getLogger(__name__)
+
+# LLM 출력 콜백을 저장할 전역 변수
+_llm_output_callback: Optional[Callable] = None
+
+
+def set_llm_output_callback(callback: Callable):
+    """LLM 출력 콜백 설정 (WebSocket 브로드캐스트용)"""
+    global _llm_output_callback
+    _llm_output_callback = callback
+    logger.info("LLM 출력 콜백 설정됨")
 
 
 class AutoTradeService:
@@ -33,6 +43,10 @@ class AutoTradeService:
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        # 뉴스 분석 상태
+        self._current_mode: str = "INIT"
+        self._last_news_analysis: Optional[Dict[str, Any]] = None
+        self._next_scan_time: str = ""
 
     async def initialize(self, config_dict: Dict[str, Any] = None) -> bool:
         """
@@ -66,6 +80,11 @@ class AutoTradeService:
                     None,
                     self._auto_trader._ensure_initialized
                 )
+
+                # LLM 출력 콜백 설정 (WebSocket 브로드캐스트용)
+                if _llm_output_callback and self._auto_trader._ensemble_analyzer:
+                    self._auto_trader._ensemble_analyzer.on_llm_output = _llm_output_callback
+                    logger.info("앙상블 분석기에 LLM 출력 콜백 설정됨")
 
                 logger.info("AutoTradeService 초기화 완료")
                 return True
@@ -133,14 +152,61 @@ class AutoTradeService:
         return True
 
     async def _polling_loop(self, interval: int):
-        """폴링 루프"""
+        """폴링 루프 (시간대별 자동 모드 전환)"""
+        from datetime import time as dt_time
+
+        market_start = dt_time(9, 0)
+        market_end = dt_time(15, 20)
+        scalping_end = dt_time(9, 30)
+
         while self._is_running:
             try:
-                results = await self.run_scan_and_trade()
+                now = datetime.now()
+                current_time = now.time()
+                is_weekend = now.weekday() >= 5
 
-                # 결과 이벤트 발행
-                for result in results:
-                    await self._emit_event("trade_executed" if result.get('success') else "analysis_completed", result)
+                # 다음 스캔 시간 설정
+                next_scan = now + timedelta(seconds=interval)
+                self._next_scan_time = next_scan.strftime("%H:%M:%S")
+
+                if is_weekend:
+                    # 주말: 뉴스 분석 모드
+                    self._current_mode = "NEWS"
+                    logger.info("[자동매매] 주말 - 뉴스 분석 모드")
+                    result = await self.run_news_analysis(max_news=30)
+                    await self._emit_event("news_analysis_completed", result)
+
+                elif current_time < market_start:
+                    # 장 시작 전: 뉴스 분석 모드
+                    self._current_mode = "NEWS"
+                    logger.info(f"[자동매매] 장 시작 전 ({market_start}) - 뉴스 분석 모드")
+                    result = await self.run_news_analysis(max_news=30)
+                    await self._emit_event("news_analysis_completed", result)
+
+                elif current_time > market_end:
+                    # 장 마감 후: 뉴스 분석 모드
+                    self._current_mode = "NEWS"
+                    logger.info(f"[자동매매] 장 마감 후 ({market_end}) - 뉴스 분석 모드")
+                    result = await self.run_news_analysis(max_news=30)
+                    await self._emit_event("news_analysis_completed", result)
+
+                elif current_time < scalping_end:
+                    # 스캘핑 시간 (09:00 ~ 09:30): 스캘핑 매매
+                    self._current_mode = "TRADING"
+                    logger.info("[자동매매] 스캘핑 모드 (09:00~09:30) - 매매 + 분석")
+                    results = await self.run_scalping_trade()
+                    for result in results:
+                        event_type = "trade_executed" if result.get('success') else "analysis_completed"
+                        await self._emit_event(event_type, result)
+
+                else:
+                    # 정규 장 시간: 매매 + 분석 모드
+                    self._current_mode = "TRADING"
+                    logger.info("[자동매매] 정규장 - 매매 + 분석 모드")
+                    results = await self.run_scan_and_trade()
+                    for result in results:
+                        event_type = "trade_executed" if result.get('success') else "analysis_completed"
+                        await self._emit_event(event_type, result)
 
                 await asyncio.sleep(interval)
 
@@ -359,6 +425,95 @@ class AutoTradeService:
             logger.error(f"스캘핑 매매 오류: {e}")
             return []
 
+    async def run_news_analysis(self, max_news: int = 30) -> Dict[str, Any]:
+        """
+        뉴스 분석 실행 (장 시작 전 분석용)
+
+        Args:
+            max_news: 분석할 최대 뉴스 수
+
+        Returns:
+            Dict: 뉴스 분석 결과
+        """
+        if self._auto_trader is None:
+            if not await self.initialize():
+                return {
+                    "news_count": 0,
+                    "market_sentiment": "NEUTRAL",
+                    "key_themes": [],
+                    "attention_stocks": [],
+                    "market_outlook": "분석 실패: 초기화 오류",
+                    "news_list": [],
+                }
+
+        try:
+            self._current_mode = "NEWS"
+            await self._emit_event("mode_changed", {"mode": "NEWS", "description": "뉴스 분석 모드"})
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._auto_trader.run_news_analysis(max_news=max_news)
+            )
+
+            # 결과 저장
+            self._last_news_analysis = result
+            self._last_news_analysis["analysis_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # 이벤트 발행
+            await self._emit_event("news_analysis_completed", result)
+
+            logger.info(f"뉴스 분석 완료: {result.get('news_count', 0)}건, 심리: {result.get('market_sentiment', 'N/A')}")
+            return result
+
+        except Exception as e:
+            logger.error(f"뉴스 분석 오류: {e}")
+            return {
+                "news_count": 0,
+                "market_sentiment": "NEUTRAL",
+                "key_themes": [],
+                "attention_stocks": [],
+                "market_outlook": f"분석 오류: {str(e)}",
+                "news_list": [],
+            }
+
+    async def get_trading_mode(self) -> Dict[str, Any]:
+        """현재 트레이딩 모드 조회"""
+        from datetime import time as dt_time
+
+        now = datetime.now()
+        current_time = now.time()
+        is_weekend = now.weekday() >= 5
+
+        market_start = dt_time(9, 0)
+        market_end = dt_time(15, 20)
+
+        if is_weekend:
+            market_status = "주말"
+            mode = "NEWS"
+            mode_description = "주말 - 뉴스 분석 모드"
+        elif current_time < market_start:
+            market_status = "장 시작 전"
+            mode = "NEWS"
+            mode_description = "장 시작 전 - 뉴스 분석 모드"
+        elif current_time > market_end:
+            market_status = "장 마감 후"
+            mode = "NEWS"
+            mode_description = "장 마감 후 - 뉴스 분석 모드"
+        else:
+            market_status = "장중"
+            mode = "TRADING"
+            mode_description = "정규장 - 매매 + 분석 모드"
+
+        return {
+            "mode": mode,
+            "mode_description": mode_description,
+            "market_status": market_status,
+            "next_scan_time": self._next_scan_time,
+            "last_news_analysis": self._last_news_analysis,
+            "is_running": self._is_running,
+        }
+
     async def get_status(self) -> Dict[str, Any]:
         """현재 상태 조회"""
         if self._auto_trader is None:
@@ -371,6 +526,8 @@ class AutoTradeService:
                 "can_trade": False,
                 "ensemble_models": [],
                 "main_model": "",
+                "current_mode": self._current_mode,
+                "last_news_analysis": self._last_news_analysis,
             }
 
         try:
@@ -392,6 +549,8 @@ class AutoTradeService:
                 "risk_status": status.get("risk_status", {}),
                 "ensemble_models": status.get("ensemble_models", []),
                 "main_model": status.get("main_model", ""),
+                "current_mode": self._current_mode,
+                "last_news_analysis": self._last_news_analysis,
             }
 
         except Exception as e:
