@@ -61,10 +61,11 @@ class SurgeDetector:
 
     # 스캘핑 기준 상수
     MIN_VOLUME_POWER = 120      # 최소 체결강도 (매수우세)
-    MIN_CHANGE_RATE = 1.0       # 최소 등락률 (%)
-    MAX_CHANGE_RATE = 15.0      # 최대 등락률 (과열 방지)
+    MIN_CHANGE_RATE = 3.0       # 최소 등락률 (%) - 변동성 확보를 위해 상향
+    MAX_CHANGE_RATE = 20.0      # 최대 등락률 (과열 방지) - 고변동성 허용
     MIN_BALANCE_RATIO = 1.2     # 최소 호가잔량비 (매수/매도)
     MIN_VOLUME = 100000         # 최소 거래량
+    MIN_PRICE = 5000            # 최소 가격 (저가주 제외)
 
     # 시장 구분 코드 (KIS API)
     # 0001: 코스피, 1001: 코스닥
@@ -296,21 +297,21 @@ class SurgeDetector:
         else:
             score -= 10  # 매도 우세
 
-        # 등락률 점수 (0-30점)
-        if 3.0 <= change_rate <= 8.0:
+        # 등락률 점수 (0-30점) - 스캘핑용 고변동성 선호
+        if 5.0 <= change_rate <= 12.0:
             score += 30
-            reasons.append(f"적정 상승률 ({change_rate:.2f}%)")
-        elif 1.5 <= change_rate < 3.0:
+            reasons.append(f"스캘핑 최적 상승률 ({change_rate:.2f}%)")
+        elif 12.0 < change_rate <= 18.0:
             score += 25
-            reasons.append(f"상승 초기 ({change_rate:.2f}%)")
-        elif 8.0 < change_rate <= 12.0:
-            score += 20
             reasons.append(f"급등 진행중 ({change_rate:.2f}%)")
-        elif change_rate > 12.0:
-            score += 10
+        elif 3.0 <= change_rate < 5.0:
+            score += 20
+            reasons.append(f"상승 초기 ({change_rate:.2f}%)")
+        elif change_rate > 18.0:
+            score += 15
             reasons.append(f"과열 주의 ({change_rate:.2f}%)")
         elif change_rate > 0:
-            score += 15
+            score += 10
 
         # 호가잔량비 점수 (0-30점)
         if balance_ratio >= 2.0:
@@ -438,6 +439,11 @@ class SurgeDetector:
         logger.info(f"총 {len(stock_data)}개 종목 분석 중... (코스피/코스닥 보통주만)")
 
         for code, data in stock_data.items():
+            # 저가주 필터링 (스캘핑에 부적합)
+            if data['price'] < self.MIN_PRICE:
+                logger.debug(f"저가주 제외: {data['name']} ({data['price']}원 < {self.MIN_PRICE}원)")
+                continue
+
             score, signal, reasons = self.calculate_surge_score(
                 volume_power=data['volume_power'],
                 change_rate=data['change_rate'],

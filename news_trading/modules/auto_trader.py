@@ -62,6 +62,8 @@ class AutoTradeConfig:
     # 급등 종목 스캔 설정
     min_surge_score: float = 50.0           # 최소 급등 점수
     max_stocks_per_scan: int = 5            # 1회 스캔 시 분석할 최대 종목 수
+    min_technical_score: float = -10.0      # 최소 기술점수 (-10 미만 제외)
+    min_price: int = 5000                   # 최소 가격 (저가주 제외)
 
     # 시장 시간 설정
     market_start: str = "09:00"             # 장 시작 시간
@@ -741,7 +743,43 @@ class AutoTrader:
 
             logger.info(f"[Scalping] 분석 완료: 시그널={ensemble_result.ensemble_signal}, "
                        f"신뢰도={ensemble_result.ensemble_confidence:.0%}, "
-                       f"합의도={ensemble_result.consensus_score:.0%}")
+                       f"합의도={ensemble_result.consensus_score:.0%}, "
+                       f"기술점수={tech_score:+.1f}")
+
+            # ========== 기술점수/가격 필터링 ==========
+            # 기술점수가 너무 낮으면 매수 제외
+            if tech_score < self.config.min_technical_score:
+                logger.warning(f"[Scalping] 기술점수 미달로 매수 제외: {tech_score:.1f} < {self.config.min_technical_score:.1f}")
+                return AutoTradeResult(
+                    success=False,
+                    action="SKIP",
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    ensemble_signal=ensemble_result.ensemble_signal,
+                    confidence=ensemble_result.ensemble_confidence,
+                    consensus=ensemble_result.consensus_score,
+                    reason=f"[스캘핑] 기술점수 미달 ({tech_score:.1f} < {self.config.min_technical_score:.1f})",
+                    technical_score=tech_score,
+                    trend=trend
+                )
+
+            # 저가주 필터링
+            if current_price < self.config.min_price:
+                logger.warning(f"[Scalping] 저가주 제외: {current_price:,}원 < {self.config.min_price:,}원")
+                return AutoTradeResult(
+                    success=False,
+                    action="SKIP",
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    ensemble_signal=ensemble_result.ensemble_signal,
+                    confidence=ensemble_result.ensemble_confidence,
+                    consensus=ensemble_result.consensus_score,
+                    reason=f"[스캘핑] 저가주 제외 ({current_price:,}원 < {self.config.min_price:,}원)",
+                    technical_score=tech_score,
+                    trend=trend
+                )
 
             # 스캘핑 설정으로 자동 매매 실행
             order_result = self._order_executor.execute_auto_trade(
@@ -890,6 +928,41 @@ class AutoTrader:
                        f"신뢰도={ensemble_result.ensemble_confidence:.0%}, "
                        f"합의도={ensemble_result.consensus_score:.0%}, "
                        f"기술점수={tech_score:+.1f}")
+
+            # ========== 기술점수/가격 필터링 ==========
+            # 기술점수가 너무 낮으면 매수 제외
+            if tech_score < self.config.min_technical_score:
+                logger.warning(f"[AutoTrader] 기술점수 미달로 매수 제외: {tech_score:.1f} < {self.config.min_technical_score:.1f}")
+                return AutoTradeResult(
+                    success=False,
+                    action="SKIP",
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    ensemble_signal=ensemble_result.ensemble_signal,
+                    confidence=ensemble_result.ensemble_confidence,
+                    consensus=ensemble_result.consensus_score,
+                    reason=f"기술점수 미달 ({tech_score:.1f} < {self.config.min_technical_score:.1f})",
+                    technical_score=tech_score,
+                    trend=trend
+                )
+
+            # 저가주 필터링
+            if current_price < self.config.min_price:
+                logger.warning(f"[AutoTrader] 저가주 제외: {current_price:,}원 < {self.config.min_price:,}원")
+                return AutoTradeResult(
+                    success=False,
+                    action="SKIP",
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    ensemble_signal=ensemble_result.ensemble_signal,
+                    confidence=ensemble_result.ensemble_confidence,
+                    consensus=ensemble_result.consensus_score,
+                    reason=f"저가주 제외 ({current_price:,}원 < {self.config.min_price:,}원)",
+                    technical_score=tech_score,
+                    trend=trend
+                )
 
             # ========== 자동 매매 실행 ==========
             if analysis_only:
